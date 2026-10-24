@@ -1,0 +1,79 @@
+---
+title: "NYC Shootings"
+output: pdf_document
+date: "2026-10-15"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(lubridate)
+```
+
+
+## NYC shooting data
+The NYC shooting data is acquired from  <https://catalog.data.gov/dataset/> and features data with shootings, victims, and offenders.  This data set is for the current calendar year and includes information regarding the event, location and time of occurrence.  Also, it includes demographics of the suspect and victim.  It was first published in 6/2022 and last updated 2/2026.
+
+```{r nyc shooting data}
+filepath = "data/NYC.csv"
+nyc_data = read_csv(filepath)
+```
+
+## Cleaning
+
+
+
+```{r shooting, echo=FALSE}
+summary(nyc_data)
+head(nyc_data)
+```
+```{r}
+colnames(nyc_data)
+```
+```{r}
+nyc_data = nyc_data %>%
+  select(-c(X_COORD_CD, Lon_Lat, Y_COORD_CD, Latitude, Longitude)) %>%
+  rename(
+    date = OCCUR_DATE,
+    time = OCCUR_TIME
+  ) %>%
+  mutate(date = as.Date(date, format = "%m/%d/%Y"))
+  
+
+```
+
+# Missing values
+```{r}
+colSums(is.na(nyc_data))
+```
+```{r}
+nyc_data %>%
+  summarise(across(everything(), ~ mean(is.na(.)) * 100))
+```
+
+
+# Handling of missing values
+Rather than losing all rows missing the perpatrators sex, race and age group, we will impute with a generalized "unknown" category.
+```{r}
+crime_clean <- nyc_data %>%
+  select(-JURISDICTION_CODE) %>%
+  mutate(
+    across(
+      c(
+        PERP_AGE_GROUP,
+        PERP_SEX,
+        PERP_RACE,
+        LOC_CLASSFCTN_DESC
+      ),
+      ~ replace_na(as.character(.x), "Unknown")
+    )
+  )
+```
+```{r}
+colSums(is.na(crime_clean))
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

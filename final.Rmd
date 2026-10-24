@@ -1,0 +1,801 @@
+---
+title: "COVID-19 Analysis"
+output:
+  pdf_document
+header-includes:
+  - \usepackage{xcolor}
+  - \definecolor{codebg}{HTML}{EEF2F7}
+  - \usepackage{fancyvrb}
+  - \usepackage{framed}  
+date: "2026-10-14"
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(readr)
+library(ggplot2)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The COVID-19 data is acquired from John Hopkins University Repository from the Center for Systems Science and Engineering. The end date for the data collection is 3/10/2023 and was aggregated from multiple different sources which can be referenced at the following location: <https://github.com/CSSEGISandData/COVID-19>.  Four datasets are used, Global COVID-19 cases, global COVID-19 deaths, United States COVID-19 cases and United States COVID-19 deaths.   
+
+## Research Questions
+The purpose of this project is to analyze the patterns and relationships between reported COVID-19 cases and deaths in the United States and world wide using data collected by John Hopkings University.  The analysis focuses on how cases and deaths chagned over time, how death rates differed across geographical locations, and the relationship between confirmed cases and reported deaths.
+
+**How did reported COVID-19 cases and deaths change over time in the United States and globally between 2020 and March 2023?**
+**How did reported COVID_19 death rates per 1000 people different amoung U.S. states and countries?**
+**What is the relationship between reported COVID-19 cases and deaths and how well can regression explain that relationship?**
+
+
+## Data Load and Cleaning
+
+### Global Cases & Deaths
+
+Loading four data sets and saving them for global cases & deaths and United States cases & deaths.
+
+```{r load data}
+url_in <-"https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_global.csv",
+                "time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_deaths_US.csv"
+                )
+urls <- str_c(url_in, file_names)
+urls
+```
+
+Save CSV as variable
+
+```{r}
+global_cases <- read.csv(urls[1])
+global_deaths <- read.csv(urls[2])
+US_cases <- read.csv(urls[3])
+US_deaths <- read.csv(urls[4])
+```
+
+Filtering the global cases to exclude Latitude and Longitude. Un-pivoting the dates.
+
+```{r global cases cleaning, echo=FALSE}
+global_cases <- global_cases %>%
+  select(-c(Lat, Long)) %>%
+  pivot_longer(
+    cols = -c(Province.State, Country.Region),
+    names_to = "date",
+    values_to = "cases"
+  )
+
+```
+
+Global deaths filtering and un-pivot.
+
+```{r global deaths cleaning}
+global_deaths <- global_deaths %>%
+  select(-c(Lat, Long)) %>%
+  pivot_longer(
+    cols = -c(Province.State, Country.Region),
+    names_to = "date",
+    values_to = "deaths")
+```
+
+View column names
+
+```{r}
+colnames(global_cases)
+colnames(global_deaths)
+```
+
+Joining the cases with the deaths by Province.State, Country.Region and date.
+
+```{r global joined}
+global <- global_cases %>%
+  full_join(
+    global_deaths,
+    by = c("Province.State", "Country.Region", "date")
+  ) %>%
+  rename(
+    country_region = Country.Region,
+    province_state = Province.State
+  ) %>%
+  mutate(
+    date = as.Date(
+      sub("^X", "", date),
+      format = "%m.%d.%y"
+    )
+  )
+
+head(global)
+```
+
+View Summary of global dataset
+
+```{r}
+summary(global)
+```
+
+Limit global data set to records that have greater than 0 cases
+
+```{r}
+global <- global %>% filter(cases > 0)
+```
+
+View records with large case numbers
+
+```{r}
+global %>% filter(cases > 28000000)
+```
+
+### United States Cases & Deaths
+
+Filtering columns, and un-pivot dates on US cases.
+
+```{r}
+us_cases = US_cases %>%
+  select(-c(Lat, Long_)) %>%
+  pivot_longer(
+    cols = 
+      -c(UID:Combined_Key),
+      names_to = "date",
+      values_to = "cases"
+      ) %>%
+  select(Admin2:cases) %>%
+  mutate(
+    date = as.Date(
+      sub("^X", "", date),
+      format = "%m.%d.%y"
+    )
+    )
+```
+
+View first 5 records
+
+```{r}
+head(us_cases)
+```
+
+Filtering and un-pivoting dates on US deaths.
+
+```{r}
+us_deaths = US_deaths %>%
+  select(-c(Lat, Long_)) %>%
+  pivot_longer(
+    cols = 
+      -c(UID:Population),
+      names_to = "date",
+      values_to = "cases"
+      ) %>%
+  select(Admin2:cases) %>%
+  rename(deaths = cases) %>%
+  mutate(
+    date = as.Date(
+      sub("^X", "", date),
+      format = "%m.%d.%y"
+    )
+    )
+```
+
+View first 5 records in US deaths.
+
+```{r}
+head(us_deaths)
+```
+
+Filter US deaths to exclude records with zero cases.
+
+```{r}
+us_cases %>%
+  count(Province_State, Country_Region, date) %>%
+  filter(n > 1)
+```
+
+Filter US deaths to exclude records with zero cases.
+
+```{r}
+us_deaths %>%
+  count(Province_State, Country_Region, date) %>%
+  filter(n > 1)
+```
+
+Create US data set by joining US cases & deaths.
+
+```{r}
+us <- us_cases %>%
+  full_join(
+    us_deaths,
+    by = c("Province_State", "Country_Region", "date", "Admin2", "Combined_Key")
+  ) %>%
+  rename(
+    country_region = Country_Region,
+    province_state = Province_State
+  ) %>%
+  mutate(
+    date = as.Date(date, format = "%m.%d.%y")
+    
+  )
+
+head(us)
+```
+
+Create the "combined_Key" feature using province_state and country_region.
+
+```{r}
+global <- global %>%
+  unite("Combined_Key",
+        c("province_state", "country_region"),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE
+        )
+```
+
+The US data features population. For consistency, adding population to the global dataset using the"Combined_Key" to join.
+
+```{r}
+uid_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+```
+
+```{r}
+uid = read_csv(uid_lookup_url) %>%
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+```
+
+Renaming columns to match joining data sets.
+
+```{r}
+uid = uid %>%
+  rename(
+    country_region = Country_Region,
+    province_state = Province_State
+  )
+```
+
+
+
+
+Summarizing statistics in the United States by state.
+
+```{r}
+us_by_state <- us %>%
+  group_by(province_state, country_region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(province_state, country_region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+```
+
+```{r}
+tail(us_by_state)
+```
+
+Summarizing statistics for the United States
+
+```{r}
+us_total <- us_by_state %>%
+  group_by(country_region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(country_region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+```
+
+```{r}
+tail(us_total)
+```
+
+## Visualizations & Analysis
+
+### United States: COVID-19 Cases and Deaths
+
+Plotting the cases and Deaths in the United States
+
+```{r}
+us_total %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) + 
+  geom_line(aes(color= "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID-19 in US", y =NULL)
+```
+
+Plotting COVID-19 cases and deaths in New York
+
+```{r}
+state = "New York"
+us_by_state %>%
+  filter(province_state == state) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) + 
+  geom_line(aes(color= "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID-19 in the US", y =NULL)
+
+```
+
+```{r}
+max(us_total$date)
+```
+
+```{r}
+max(us_total$deaths)
+```
+
+Calculating new cases and new deaths instead of cumulative rates.
+
+```{r}
+us_by_state <- us_by_state %>%
+  group_by(province_state) %>%
+  arrange(date, .by_group = TRUE) %>%
+  mutate(
+    new_cases = cases - lag(cases),
+    new_deaths = deaths - lag(deaths)
+  ) %>%
+  ungroup()
+
+us_total = us_total %>%
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths))
+```
+
+```{r}
+tail(us_total)
+```
+
+Plotting New Cases and Deaths in the United States
+
+```{r}
+us_total %>%
+  mutate(
+    new_cases = ifelse(new_cases > 0, new_cases, NA),
+    new_deaths = ifelse(new_deaths > 0, new_deaths, NA)
+  ) %>%
+  ggplot(aes(x = date, y = new_cases)) +
+  geom_line(aes(color = "new_cases"), na.rm = TRUE) +
+  geom_point(aes(color = "new_cases"), na.rm = TRUE) +
+  geom_line(aes(y = new_deaths, color = "new_deaths"), na.rm = TRUE) +
+  geom_point(aes(y = new_deaths, color = "new_deaths"), na.rm = TRUE) +
+  scale_y_log10() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 90)
+  ) +
+  labs(title = "Covid19 in US", y = NULL)
+```
+
+Plotting new cases and deaths in New York
+
+```{r}
+state = "New York"
+us_by_state %>%
+  filter(province_state == state) %>%
+  ggplot(aes(x = date, y = new_cases)) + 
+  geom_line(aes(color= "new_cases"), na.rm = TRUE) +
+  geom_point(aes(color = "new_cases"), na.rm = TRUE) +
+  geom_line(aes(y = new_deaths, color = "new_deaths"), na.rm = TRUE) +
+  geom_point(aes(y = new_deaths, color = "new_deaths"), na.rm = TRUE) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID-19 in New York", y =NULL)
+```
+
+Summarizing statistics for State totals.
+
+```{r}
+us_state_totals = us_by_state %>%
+  group_by(province_state) %>%
+  summarize(
+    deaths = max(deaths), 
+    cases = max(cases), 
+    population = max(Population), 
+    cases_per_thou = (1000*cases / population),
+    deaths_per_thou = (1000*deaths / population)) %>%
+  filter(cases > 0, population > 0)
+```
+
+```{r}
+us_state_totals %>%
+  slice_min(deaths_per_thou, n =10) %>%
+  select(deaths_per_thou, cases_per_thou, everything())
+```
+
+```{r}
+us_state_totals %>%
+  slice_max(deaths_per_thou, n =10) %>%
+  select(deaths_per_thou, cases_per_thou, everything())
+```
+
+#### Analysis: COVID-19 Trends in the United States
+
+Over the course of the pandemic, cases and deaths spiked and then fluctuated.  Peaks occurred around the new years of 2021 and 2022, showing seasonal trends.  Arizona showed the highest deaths per thousand, while United States island territories and states such as American Somoa, North Mariana Island, Virgin Islands and Hawaii showed the lowest deaths per thousands.  After Data may have been reported differently through out the data collection.  The new deaths trend with the new cases, and both become more variable especially after 2022.  After 2022, both variables have trended negatively signifying lowering rates of cases and deaths.  
+
+### Global: COVID-19 Cases and Deaths
+
+```{r}
+global
+```
+```{r}
+global_country_totals = global %>%
+  group_by(country_region) %>%
+  summarize(
+    deaths = max(deaths), 
+    cases = max(cases), 
+    ) %>%
+  filter(cases > 0)
+```
+
+```{r}
+global_country_totals <- global_country_totals %>%
+  left_join(uid, by = c("country_region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(country_region, cases, deaths, Population)
+```
+
+
+```{r}
+uid_country <- uid %>%
+  mutate(
+    Population = as.numeric(Population)
+  ) %>%
+  filter(
+    is.na(province_state) | province_state == ""
+  ) %>%
+  group_by(country_region) %>%
+  summarize(
+    population = if (all(is.na(Population))) {
+      NA_real_
+    } else {
+      max(Population, na.rm = TRUE)
+    },
+    .groups = "drop"
+  )
+```
+
+```{r}
+global_country_totals <- global %>%
+  group_by(country_region, date) %>%
+  summarize(
+    cases = sum(cases, na.rm = TRUE),
+    deaths = sum(deaths, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(country_region) %>%
+  filter(date == max(date)) %>%
+  ungroup() %>%
+  left_join(uid_country, by = "country_region") %>%
+  filter(
+    !is.na(population),
+    population > 0
+  ) %>%
+  mutate(
+    cases_per_mil = cases / population * 1000000,
+    deaths_per_mil = deaths / population * 1000000
+  )
+```
+
+```{r}
+global_country_totals %>%
+  select(
+    country_region,
+    population,
+    cases,
+    deaths,
+    deaths_per_mil
+  ) %>%
+  head(10)
+```
+
+
+```{r}
+global_totals <- global %>%
+  group_by(country_region, date) %>%
+  summarize(
+    cases = sum(cases, na.rm = TRUE),
+    deaths = sum(deaths, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(country_region) %>%
+  filter(date == max(date)) %>%
+  ungroup()
+```
+
+
+
+```{r}
+largest_global = global_country_totals %>%
+  slice_max(deaths_per_mil, n =10) %>%
+  select(deaths_per_mil, everything())
+```
+
+```{r}
+largest_global
+```
+
+
+```{r}
+smallest_global = global_country_totals %>%
+  slice_min(deaths_per_mil, n =10) %>%
+  select(deaths_per_mil, everything())
+```
+
+```{r}
+ggplot(largest_global, aes(x = country_region, y = deaths_per_mil)) +
+  geom_col() +
+  labs(
+    x = "Country",
+    y = "Deaths per 1 Million People",
+    title = "Largest COVID-19 Deaths per 1 Million People by Country"
+  ) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+ggplot(smallest_global, aes(x = country_region, y = deaths_per_mil)) +
+  geom_col() +
+  labs(
+    x = "Country",
+    y = "Deaths per 1 Million People",
+    title = "Fewest COVID-19 Deaths per 1 Million People by Country"
+  ) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+global_total <- global %>%
+  group_by(date) %>%
+  summarize(
+    cases = sum(cases, na.rm = TRUE),
+    deaths = sum(deaths, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(date) %>%
+  mutate(
+    new_cases = cases - lag(cases),
+    new_deaths = deaths - lag(deaths)
+  )
+```
+
+
+```{r}
+global_total
+```
+
+```{r}
+global_total %>%
+  mutate(
+    new_cases = ifelse(new_cases > 0, new_cases, NA),
+    new_deaths = ifelse(new_deaths > 0, new_deaths, NA)
+  ) %>%
+  ggplot(aes(x = date, y = new_cases)) +
+  geom_line(aes(color = "new_cases"), na.rm = TRUE) +
+  geom_point(aes(color = "new_cases"), na.rm = TRUE) +
+  geom_line(aes(y = new_deaths, color = "new_deaths"), na.rm = TRUE) +
+  geom_point(aes(y = new_deaths, color = "new_deaths"), na.rm = TRUE) +
+  scale_y_log10() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 90)
+  ) +
+  labs(title = "New Cases & New Deaths: Global COVID-19 Trends", y = NULL)
+```
+```{r}
+global_yearly <- global_total %>%
+  arrange(date) %>%
+  mutate(
+    year = lubridate::year(date),
+    new_cases = cases - lag(cases),
+    new_deaths = deaths - lag(deaths)
+  ) %>%
+  filter(!is.na(new_cases), !is.na(new_deaths)) %>%
+  group_by(year) %>%
+  summarise(
+    annual_cases = sum(new_cases),
+    annual_deaths = sum(new_deaths),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    death_percentage = 100 * annual_deaths / annual_cases
+  )
+
+global_yearly
+```
+
+
+
+#### Analysis: COVID-19 Trends across the Globe
+
+The global trends of COVID-19 cases and deaths across the globe are similar to the United States.  There was a sharp spike in 2020, followed by a leveling out.  While new cases still climbed in a relatively shallow way, the new death cases remained relatively flat.  Larger variance is see after 2022-2023.  At the end of data collection in 2023, new cases and deaths were at or near the highest levels of 2020, recovering from any increases in 2021-2022.  The countries showing the largest deaths per million where Peru and many countries in Eastern Europe. The countries show the fewest deaths per million were Holy See and North Korea.  Holy See, being the Vatican enclave in Rome, has 1,000 person population and zero COVID-19 deaths as of the data collection.     
+
+Annual tends show the death percentage decreasing by over a full percent between 2020 and 2023.  
+
+## Modeling
+
+### United States Multiple Linear Regression Model
+
+```{r}
+mod = lm(deaths_per_thou ~ + cases_per_thou + log(population), data = us_state_totals)
+```
+
+```{r}
+summary(mod)
+```
+
+```{r}
+x_grid = seq(1, 151)
+```
+
+```{r}
+new_df = tibble(cases_pre_thou = x_grid)
+```
+
+```{r}
+us_tot_pred = us_state_totals %>% mutate(pred = predict(mod))
+  
+```
+
+Plotting predicted deaths from cases vs true deaths and cases.
+
+```{r}
+us_tot_pred %>%
+  ggplot(aes(x = cases_per_thou, y = deaths_per_thou)) +
+  geom_point(color = "steelblue", size = 3) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+    title = "COVID-19 Cases vs. Deaths by US State",
+    x = "Cases per 1,000 People",
+    y = "Deaths per 1,000 People"
+  ) +
+  theme_minimal()
+```
+
+####Analysis: United States Multiple Linear Regression Model
+
+The multiple linear regression model predicts deaths per thousand using cases per thousand and the log of the population. The deaths per thousand were calculated on a lag behind the cases. The Adjusted R-squared is 0.4599, showing that the model explains approximately 46% of the variation.  The p-values show that both the cases per thousand and population are significant.  However, the pattern in the scatter plot may show some non-linearity that the model does not capture.  Also, as time passes, treatments improve and date of infection may also play a role in the deaths per thousand prediction.   
+
+
+### Global COVID-19 Linear Regression & Polynomial Regression
+
+```{r}
+global_mod <- global_country_totals %>%
+  filter(
+    is.finite(cases_per_mil),
+    is.finite(deaths_per_mil),
+    cases_per_mil > 0,
+    deaths_per_mil > 0
+  ) %>%
+  lm(
+    log(deaths_per_mil) ~ log(cases_per_mil),
+    data = .
+  )
+
+summary(global_mod)
+```
+```{r}
+
+global_pred <- global_country_totals %>%
+  mutate(
+    pred_global = predict(global_mod, newdata = global_country_totals)
+  )
+
+```
+
+```{r}
+global_country_totals %>%
+  ggplot(aes(x = cases_per_mil, y = deaths_per_mil)) +
+  geom_point(color = "steelblue", size = 3) +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(
+  title = "COVID-19 Cases vs. Deaths Globally",
+  x = "Cumulative Cases (Millions)",
+  y = "Cumulative Deaths (Millions)"
+) +
+  theme_minimal()
+```
+```{r}
+global_country_totals %>%
+  filter(
+    is.finite(cases_per_mil),
+    is.finite(deaths_per_mil),
+    cases_per_mil > 0,
+    deaths_per_mil > 0
+  ) %>%
+  ggplot(aes(
+    x = cases_per_mil,
+    y = deaths_per_mil
+  )) +
+  geom_point(color = "steelblue", alpha = 0.6) +
+  geom_smooth(method = "lm", se = TRUE) +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(
+    title = "COVID-19 Cases vs. Deaths Globally",
+    subtitle = "Population-adjusted rates on logarithmic scales",
+    x = "Cases per 1 Million People (Log Scale)",
+    y = "Deaths per 1 Million People (Log Scale)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+global_country_totals %>%
+  filter(deaths_per_mil > 0) %>%
+  ggplot(aes(x = deaths_per_mil )) +
+  geom_density(fill = "steelblue", alpha = 0.4) +
+  labs(
+    title = "Density of COVID-19 Deaths per 1 Million People Across Countries",
+    x = "Deaths per 1 Million People",
+    y = "Density"
+  ) +
+  theme_minimal()
+```
+
+
+##### Anaylsis: Global Linear Regression
+
+The linear regression model uses global new cases (Millions) to predict new deaths (Millions).  The relationship between new cases and new deaths on the global scale is much more linear than in the United States alone.  The adjusted R-squared of the simple linear regression model is 0.7847, showing that the model explains about 78% of the variability.  The scatterplot with deaths and cases per million featured a fan-shape, because of this we used logarithmic analysis, where both variables were transformed using logarithmic scales to reduce skewness and improve the visualization relationship.  The plot shows a positive association between reported cases rates and death rates.  The density plot shows a skewed curve with the majority of the deaths being below 1500-2000 deaths per 1 Million people.
+
+# Discussion of Results
+
+**How did reported COVID-19 cases and deaths change over time in the United States and globally between 2020 and March 2023?**
+The cases and deaths had a sharp increase in 2020 both in the United States and globally.  While the new cases and new death are mostly parallel, they start to slightly diverge with less new deaths per new cases a year. 
+
+The annual deaths-to-cases percentage was calculated by dividing newly reported deaths by newly reported cases for each year.  The results indicate that the percentage declined from 2.27% in 2020 to 1.74% in 2021 and 0.33% in 2022.  This represents an approximate 85.5% relative decrease between 2020 and 2022.  The number of reported cases increased substantially in 2022, but the number of reported deaths decreased compared to 2021.  This suggests that over the coarse of the pandemic the relationship between cases and deaths changed. 2023 cannot be compared because the data does not include the entire year.
+
+Many factors may have contributed, including vaccination, infection immunity, and the virus variant in circulation, treatment, and testing/reporting practices.  The annual reported deaths to cases are not equivalent to infection fatality rates since deaths may be recorded weeks after the cases.  In addition, many cases go unreported.
+
+**How did reported COVID_19 death rates per 1000 people different among U.S. states and countries?**
+
+U.S Comparisons
+Arizona had the highest reported COVID-19 death rate among the U.s.s states & territories examined, with 4.55 deaths per 1,000 people.  Oklahoma & Mississippi followed with 4.54 and 4.49 deaths per 1,000 people.  Among the states with lowest reported death rates were Hawaii (1.3), Vermont (1.49), and Utah (1.65).  Some U.s. island territories reported even fewer deaths per cases.  These results show variation across states in reporting COVID-19 deaths.  These differences may be because of demographics, underlying health conditions, vaccination rates, healthcare access and local public health responses.
+
+Global Comparisons
+There are large variations across the globe with reported COVID-19 death rates.  Peru had the highest reported death rate with approximately 6,658 deaths per million people (equivalent to 6.6 people per thousand, if comparing to the same scale used in the U.s. data).  Bulgaria and Hungary followed with approximately 5.5 and 5.05 deaths per 1,000 people.  Countries with the lowest reported death rates were Benin, Burundi, Chad, and North Korea.  However, these results should be interpreted cautiously because lower reported mortality does not necessarily indicate actual deaths.  
+
+The results indicate substantial variation in population-adjusted COVID-19 reported death rates in the United States and the around the world.  These differences cannot be attributed to a single cause.  Additional information about demographics, vaccination rates, healthcare capacity, and reporting practices would be needed to gain further insight into explaining the variations.
+
+**What is the relationship between reported COVID-19 cases and deaths and how well can regression explain that relationship?**
+
+The analysis examined the relationship between cumulative reported COVID-19 cases and deaths across the countries using population-adjusted rates per million people.  A log-linear regression model was used to evaluate the association between the two variables.  The scatterplot shows a positive relationship between the reported cases and death rates.  Countries with higher levels of reported cases also had higher levels or reported deaths, generally.  The original plot showed considerable variation and a fan-shaped pattern.  After applying logarithmic transformations, the relationship appeared more linear and making the model a more useful approach.  The adjusted R-squared of the simple linear regression model is 0.7847, showing that the model explains about 78% of the variability.  However, variation still exist among countries of similar case rates.  These differences may reflect variations in demographics, vaccination rates, healthcare capacity, and reporting practices.  Although regression can identify and summarize statistical relationships, it cannot establish that the differences along caused the observed difference in death rates.  
+
+# Data Bias and Limitations
+
+### Underreporting of COVID-19 Cases
+
+Not all infections were officially reported.  Individuals with mild or no symptoms may not have been tested.  The increased ability for at-home testing may have reduced the number of cases reported.
+
+### Reporting Practice Variation
+
+Countries and states may use different testing strategies and reporting schedules.  These differences can affect comparisons between geographic locations. 
+
+### Population Differences
+
+Comparing total cases and deaths without accounting for population size can be misleading.  This analysis uses population-adjusted death rates to make comparisons more meaningful.  The rates do not account for differences in demographics such as age, health conditions or healthcare access.
+
+### Regression Model Limitations
+
+The regression models examine statistical relationships between the reported cases and the reported deaths.  Relationships do not indicate causation.  Other variables such as vaccination rates, healthcare access, demographics, treatment, and testing practices may influence death rates.
+
+
+# Conclusion
+
+
+
+This project demonstrates the value of using data visualization, population-adjusted comparisons and regression modeling to explore COVID-19 outcomes.  The results show that the relationship between reported cases and deaths changed over time and that the mortality rates varied substantially across the world.  This analysis showed that reported deaths declined relative to reported cases over the course of the pandemic.  The regression analysis also showed a positive relationship between reported cases and reported deaths.  Further research that incorporates vaccination rates, healthcare access, demographics, treatment, and testing practices could provide more insight into the drivers of variance between the cases and death rates. 
+
+
+# References
+"COVID-19 Data Repository by the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University" or "JHU CSSE COVID-19 Data" for short, and the url: <https://github.com/CSSEGISandData/COVID-19>.
+
+19 
